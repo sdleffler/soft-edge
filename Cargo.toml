@@ -1,8 +1,15 @@
 [package]
 name = "soft-edge"
+description = "efficient bithackery for making 3D collision meshes out of grids and stacked tile maps"
 version = "0.1.0"
 edition = "2021"
 authors = ["Shea 'Decibel' Leffler <shea@errno.com>"]
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+repository = "https://github.com/sdleffler/soft-edge"
+documentation = "https://docs.rs/soft-edge"
+keywords = ["gamedev", "mesh", "voxel", "tile", "collision"]
+categories = ["algorithms", "data-structures", "game-development", "mathematics"]
 
 [dependencies]
 arrayvec = "0.7.2"
@@ -13,8 +20,6 @@ thiserror = "1.0.30"
 [profile.dev]
 # Rust iterators on zero optimizations? Hell naw.
 opt-level = 1
-
-[features]
 
 [dev-dependencies]
 maplit = "1.0.2"
