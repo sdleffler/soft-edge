@@ -1,7 +1,6 @@
 //! # Soft Edge: efficient bithackery for making 3D collision meshes out of grids and stacked tile maps
 //!
-//! *indecipherable wailing guitar noises and tape echo sounds*
-//! - Wata
+//! *indecipherable wailing guitar noises and tape echo sounds* - Wata (Boris - Soft Edge)
 //!
 //! `soft-edge` is a crate which provides utilities for dealing with 3D grids where the cells are
 //! colliders defined as convex hulls of subsets of the unit cube.

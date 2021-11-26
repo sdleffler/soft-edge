@@ -1,17 +1,16 @@
 # Soft-Edge: efficient bithackery for making 3D collision meshes out of grids and stacked tile maps
 
-*indecipherable wailing guitar noises and tape echo sounds*
-- Wata (Soft Edge)
+*indecipherable wailing guitar noises and tape echo sounds* - Wata (Boris - Soft Edge)
 
 `soft-edge` is a crate which provides utilities for dealing with 3D grids where the cells are
 colliders defined as convex hulls of subsets of the unit cube.
 
 Things it gives you:
-- [`Vertex`], representing a vertex of the unit cube as an index in `0..8`
-- [`VertexSet`], representing a subset of the vertices of the unit cube as a 1-byte bitset
-- [`Atom`], representing a valid convex non-coplanar subset of the vertices of the unit cube
-- [`CompoundHull`], representing a clippable convex hull of an `Atom`
-- [`HullFacet`], representing a polygon of a potentially clipped compound hull of an atom (which
+- `Vertex`, representing a vertex of the unit cube as an index in `0..8`
+- `VertexSet`, representing a subset of the vertices of the unit cube as a 1-byte bitset
+- `Atom`, representing a valid convex non-coplanar subset of the vertices of the unit cube
+- `CompoundHull`, representing a clippable convex hull of an `Atom`
+- `HullFacet`, representing a polygon of a potentially clipped compound hull of an atom (which
   *should* respect CCW winding order, but I haven't confirmed that it always does yet)
 
 # Why?
@@ -23,7 +22,7 @@ because the vertices of these two tiles are shared) instead get caught on the cr
 during collision detection the object is moved into a tile by some force and ends up spuriously
 colliding with an unexposed edge of one tile.
 
-`soft-edge`'s [`CompoundHull`] type represents a sort of encoded tile collider with a
+`soft-edge`'s `CompoundHull` type represents a sort of encoded tile collider with a
 `join_exteriors` method that erases any of these unexposed edges between two tiles, leaving you
 with the surface polygons that can't cause the crack problem. In addition, these clipping
 operations are extremely fast, requiring only three bitwise operations (maybe some more because
@@ -73,21 +72,20 @@ the X axis is `1`, Y bit is whether or not the Y axis is `1`, etc.
 # "Exact" coordinates for vertex index deduplication
 
 In order to facilitate vertex deduplication (for an indexed triangle mesh, for example) most of
-the output coordinates for things like the [`CompoundHull`]'s facets ([`HullFacet`]) are
-presented using the [`Exact`] type. This wraps `nalgebra`'s [`Point3<i32>`], and is essentially
+the output coordinates for things like the `CompoundHull`'s facets (`HullFacet`) are
+presented using the `Exact` type. This wraps `nalgebra`'s `Point3<i32>`, and is essentially
 just the same coordinates you would expect but scaled by a factor of 2 on every axis. This
 allows us to represent centroids of faces with no possibility of error, and also provides a
 hashable type which can be used to build a set mapping vertices to indices.
 
 # Generally speaking, how do you expect me to use this?
 
-1. Encode your collision map as a grid of bytes, which correspond to valid [`Atom`]s.
-   Deserialize these bytes into [`VertexSet`]s using [`VertexSet::from_u8`], and try to
-   construct atoms from them with [`Atom::try_new`].
-2. Construct a three-dimensional grid consisting of the [`CompoundHull`]s of the atom grid
-   elements, and then for every hull in the grid, `join` it with its neighbors on the proper
-   axes.
-3. Extract facets of these joined compound hulls as [`HullFacet`]s, and then construct your
+1. Encode your collision map as a grid of bytes, which correspond to valid `Atom`s.
+   Deserialize these bytes into `VertexSet`s using `VertexSet::from_u8`, and try to
+   construct atoms from them with `Atom::try_new`.
+2. Construct a three-dimensional grid consisting of the `CompoundHull`s of the atom grid elements,
+   and then for every hull in the grid, `join` it with its neighbors on the proper axes.
+3. Extract facets of these joined compound hulls as `HullFacet`s, and then construct your
    collision geometry with them. This will end up as a very much non-convex mesh, which you may
    want to decompose into convex sub-meshes (but don't have to, if you do collisions directly on
    polygons and only allow contact normals which penetrate through their "surface" side.)
