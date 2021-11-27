@@ -173,7 +173,7 @@ impl Face {
             let v1 = facet;
             let v2 = (v1 + 1) & 0b11;
 
-            // flip winding order
+            // flip winding order.
             if self.axis().requires_winding_flip() {
                 HullFacet::Triangle([center, face_verts[v1].to_exact(), face_verts[v2].to_exact()])
             } else {

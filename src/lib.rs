@@ -10,8 +10,8 @@
 //! - [`VertexSet`], representing a subset of the vertices of the unit cube as a 1-byte bitset
 //! - [`Atom`], representing a valid convex non-coplanar subset of the vertices of the unit cube
 //! - [`CompoundHull`], representing a clippable convex hull of an `Atom`
-//! - [`HullFacet`], representing a polygon of a potentially clipped compound hull of an atom (which
-//!   *should* respect CCW winding order, but I haven't confirmed that it always does yet)
+//! - [`HullFacet`], representing a polygon of a potentially clipped compound hull of an atom.
+//!   Facets calculated from a [`CompoundHull`] will *always* be in CCW winding order.
 //!
 //! # Why?
 //!
