@@ -674,11 +674,11 @@ mod tests {
 
     #[test]
     fn interior_winding() {
-        for (i, atom) in Atom::generator().enumerate() {
+        for (_i, atom) in Atom::generator().enumerate() {
             let centroid = atom.to_set().centroid();
-            println!("atom [{:03}] w/ centroid {} {:#}", i, centroid, atom);
-            for (j, facet) in atom.compound_hull().interior().facets().enumerate() {
-                println!("facet [{:02}]: {:?}", j, facet);
+            // println!("atom [{:03}] w/ centroid {} {:#}", _i, centroid, atom);
+            for (_j, facet) in atom.compound_hull().interior().facets().enumerate() {
+                // println!("facet [{:02}]: {:?}", _j, facet);
                 assert!(facet.is_normal_outwards_with_respect_to_point(&centroid));
             }
         }

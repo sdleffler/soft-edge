@@ -10,8 +10,8 @@ Things it gives you:
 - `VertexSet`, representing a subset of the vertices of the unit cube as a 1-byte bitset
 - `Atom`, representing a valid convex non-coplanar subset of the vertices of the unit cube
 - `CompoundHull`, representing a clippable convex hull of an `Atom`
-- `HullFacet`, representing a polygon of a potentially clipped compound hull of an atom (which
-  *should* respect CCW winding order, but I haven't confirmed that it always does yet)
+- `HullFacet`, representing a polygon of a potentially clipped compound hull of an atom. Hull facets
+  calculated from compound hulls of atoms will always be wound CCW.
 
 # Why?
 
@@ -90,9 +90,8 @@ hashable type which can be used to build a set mapping vertices to indices.
    want to decompose into convex sub-meshes (but don't have to, if you do collisions directly on
    polygons and only allow contact normals which penetrate through their "surface" side.)
 
-Step 3 has some caveats. `soft-edge` attempts to produce hull facets with the correct winding
-order, which should allow you to easily calculate their normals. If it does not, this is a bug,
-and must be fixed. The caveat here is that `soft-edge` does not yet have a full test suite.
+`soft-edge` attempts to produce hull facets with the correct winding order (CCW), which should allow
+you to easily calculate their normals. If it does not, this is a bug, and must be fixed.
 
 ## License
 
