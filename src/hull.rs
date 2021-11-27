@@ -81,8 +81,19 @@ impl Face {
             }
         }
 
-        let axis_bits = axis.to_bits();
-        bits[4..7].copy_from_bitslice(&axis_bits[0..3]);
+        bits[4..7].copy_from_bitslice(&axis.to_bits()[0..3]);
+
+        Self { bits }
+    }
+
+    /// Construct an empty face on a given axis.
+    ///
+    /// Atoms can't be empty, so this is useful if you need to just conjure an empty face out of
+    /// nowhere.
+    #[inline]
+    pub fn empty(axis: Axis) -> Self {
+        let mut bits = BitArray::zeroed();
+        bits[4..7].copy_from_bitslice(&axis.to_bits()[0..3]);
 
         Self { bits }
     }
@@ -375,6 +386,18 @@ impl ExteriorHull {
     pub fn facets(&self) -> impl Iterator<Item = HullFacet> + '_ {
         self.faces.iter().copied().flat_map(Face::facets)
     }
+
+    /// Directly set a face of the exterior hull.
+    #[inline]
+    pub fn set_face(&mut self, face: Face) {
+        self.faces[face.axis().to_index()] = face;
+    }
+
+    /// Get a face of the exterior hull.
+    #[inline]
+    pub fn face(&self, axis: Axis) -> &Face {
+        &self.faces[axis.to_index()]
+    }
 }
 
 /// The "compound hull" of an atom is its convex hull, possibly with pieces missing from its
@@ -415,6 +438,12 @@ impl CompoundHull {
     #[inline]
     pub fn exterior(&self) -> &ExteriorHull {
         &self.exterior
+    }
+
+    /// Get the exterior component of the hull, mutably.
+    #[inline]
+    pub fn exterior_mut(&mut self) -> &mut ExteriorHull {
+        &mut self.exterior
     }
 
     /// Join the exterior hulls of two compound hulls.
@@ -528,7 +557,6 @@ mod tests {
     use super::*;
     use crate::{vertex_set, FACES};
     use maplit::hashset;
-    use nalgebra::*;
     use std::collections::HashSet;
 
     fn hull(vertex_set: VertexSet) -> CompoundHull {

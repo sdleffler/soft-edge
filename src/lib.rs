@@ -305,6 +305,17 @@ pub const ANOMALOUS_CONFIGURATIONS: [VertexSet; 8] = [
     const_vertex_set![0, 0, 0, 1, 0, 1, 1, 0],
 ];
 
+/// Axis unit vectors in `i32` coordinates corresponding to the same index order as faces and the
+/// axis `to_index()` and `u8` representation.
+pub const AXIS_VECTORS: [Vector3<i32>; 6] = [
+    vector![1, 0, 0],
+    vector![0, 1, 0],
+    vector![0, 0, 1],
+    vector![-1, 0, 0],
+    vector![0, -1, 0],
+    vector![0, 0, -1],
+];
+
 /// Represents a single signed axis: `+X`, `+Y`, `+Z`, `-X`, `-Y`, or `-Z`.
 ///
 /// These are used to enumerate the faces of the unit cube when deriving the exterior hull of an
@@ -326,6 +337,29 @@ pub enum Axis {
 }
 
 impl Axis {
+    /// Construct an axis from adjacent integer coordinates, if they are exactly adjacent.
+    ///
+    /// This is useful for when you're dealing with adjacent atoms and need to find the axis between
+    /// them so you can join their faces along that axis, for example.
+    ///
+    /// The axis returned corresponds to the vector from `p0` towards `p1`. Returns `None` if the
+    /// points are non-adjacent.
+    #[inline]
+    pub fn from_adjacent_coords(p0: &Point3<i32>, p1: &Point3<i32>) -> Option<Self> {
+        let v0 = p1 - p0;
+        AXIS_VECTORS
+            .iter()
+            .copied()
+            .position(|va| v0 == va)
+            .map(|i| unsafe { Self::from_u8_unchecked(i as u8) })
+    }
+
+    /// Convert this axis to its representative integer unit vector.
+    #[inline]
+    pub fn to_offset(self) -> Vector3<i32> {
+        AXIS_VECTORS[self.to_index()]
+    }
+
     /// # Safety
     ///
     /// This byte must be a valid `Axis` (one of the six byte values defined in the enum.)
