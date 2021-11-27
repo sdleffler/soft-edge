@@ -1,7 +1,8 @@
-use core::fmt;
+use std::fmt;
 
 use arrayvec::ArrayVec;
 use bitvec::prelude::*;
+use nalgebra::*;
 
 use crate::{Atom, Axis, Exact, Vertex, VertexSet, ANOMALOUS_CONFIGURATIONS, SYMMETRIES};
 
@@ -143,7 +144,7 @@ impl Face {
                 .map(Vertex::to_exact);
 
             // Winding order.
-            if self.axis().is_negative() {
+            if !self.axis().requires_winding_flip() {
                 verts.reverse();
             }
 
@@ -157,13 +158,13 @@ impl Face {
             let v3 = (v2 + 1) & 0b11;
 
             // flip winding order
-            if self.axis().is_negative() {
+            if self.axis().requires_winding_flip() {
                 HullFacet::Triangle(
-                    [face_verts[v2], face_verts[v1], face_verts[v3]].map(Vertex::to_exact),
+                    [face_verts[v1], face_verts[v2], face_verts[v3]].map(Vertex::to_exact),
                 )
             } else {
                 HullFacet::Triangle(
-                    [face_verts[v1], face_verts[v2], face_verts[v3]].map(Vertex::to_exact),
+                    [face_verts[v2], face_verts[v1], face_verts[v3]].map(Vertex::to_exact),
                 )
             }
         };
@@ -173,7 +174,7 @@ impl Face {
             let v2 = (v1 + 1) & 0b11;
 
             // flip winding order
-            if self.axis().is_negative() {
+            if self.axis().requires_winding_flip() {
                 HullFacet::Triangle([center, face_verts[v1].to_exact(), face_verts[v2].to_exact()])
             } else {
                 HullFacet::Triangle([center, face_verts[v2].to_exact(), face_verts[v1].to_exact()])
@@ -257,7 +258,7 @@ impl Face {
 /// three vertices which are alone on their plane within the cube.
 #[derive(Debug, Clone)]
 pub struct InteriorHull {
-    facets: ArrayVec<VertexSet, 8>,
+    facets: ArrayVec<HullFacet, 8>,
 }
 
 impl InteriorHull {
@@ -270,35 +271,14 @@ impl InteriorHull {
     /// Return an iterator over all facets on the interior hull.
     #[inline]
     pub fn facets(&self) -> impl Iterator<Item = HullFacet> {
-        self.facets
-            .iter()
-            .map(|facet| match facet.len() {
-                3 => HullFacet::Triangle(
-                    facet
-                        .vertices()
-                        .map(Vertex::to_exact)
-                        .collect::<ArrayVec<_, 3>>()
-                        .into_inner()
-                        .unwrap(),
-                ),
-                4 => HullFacet::Rectangle(
-                    facet
-                        .vertices()
-                        .map(Vertex::to_exact)
-                        .collect::<ArrayVec<_, 4>>()
-                        .into_inner()
-                        .unwrap(),
-                ),
-                _ => unreachable!("all facets must have 3 or 4 vertices!"),
-            })
-            .collect::<ArrayVec<HullFacet, 8>>()
-            .into_iter()
+        self.facets.clone().into_iter()
     }
 }
 
 #[inline]
 fn generate_interior_hull(atom: VertexSet) -> InteriorHull {
     let mut facets = ArrayVec::new();
+    let centroid = atom.centroid();
 
     // First, check all of the symmetry planes; extract all vertices of each symmetry plane. If
     // there are more than two vertices, we found a potentially on-hull intersection. Try it as a
@@ -315,7 +295,9 @@ fn generate_interior_hull(atom: VertexSet) -> InteriorHull {
         .filter(|intersection| intersection.len() >= 3)
     {
         if intersection.len() > 2 && atom.is_on_hull(intersection) {
-            facets.push(intersection);
+            let mut facet = HullFacet::from_vertex_set(intersection);
+            facet.match_winding_to_centroid(&centroid);
+            facets.push(facet);
         } else if intersection.len() == 4 {
             // Permute the triangles and try them all.
             let mut vs = intersection.vertices();
@@ -344,7 +326,9 @@ fn generate_interior_hull(atom: VertexSet) -> InteriorHull {
             for tri_list in tri_lists {
                 let tri_set = tri_list.into_iter().collect();
                 if atom.is_on_hull(tri_set) {
-                    facets.push(tri_set);
+                    let mut facet = HullFacet::from_vertex_set(tri_set);
+                    facet.match_winding_to_centroid(&centroid);
+                    facets.push(facet);
                     // Only one can be on the hull!
                     break;
                 }
@@ -468,6 +452,73 @@ impl fmt::Debug for HullFacet {
             Self::Rectangle([a, b, c, d]) => {
                 write!(f, "Rectangle([{}, {}, {}, {}])", a.0, b.0, c.0, d.0)
             }
+        }
+    }
+}
+
+impl HullFacet {
+    /// Find the facet's normal.
+    #[inline]
+    pub fn normal(self) -> UnitVector3<f32> {
+        let (Self::Triangle([a, b, c]) | Self::Rectangle([a, b, c, _])) = self;
+        let (p0, p1, p2) = (a.to_f32(), b.to_f32(), c.to_f32());
+        let v1 = p0 - p1;
+        let v2 = p2 - p1;
+        UnitVector3::new_normalize(v1.cross(&v2))
+    }
+
+    /// Test if this facet's normal faces outwards from a given point, such as the centroid of the
+    /// vertex set. Useful for asserting that a facet is properly wound CCW.
+    #[inline]
+    pub fn is_normal_outwards_with_respect_to_point(self, p0: &Point3<f32>) -> bool {
+        let (Self::Triangle([a, _, _]) | Self::Rectangle([a, _, _, _])) = self;
+        let p1 = a.to_f32();
+        let n = self.normal();
+        let v = p1 - p0;
+        n.dot(&v) > 0.
+    }
+
+    /// Given a centroid, ensure that the winding order of this facet produces a normal that faces
+    /// outwards from it.
+    #[inline]
+    pub fn match_winding_to_centroid(&mut self, centroid: &Point3<f32>) {
+        if !self.is_normal_outwards_with_respect_to_point(centroid) {
+            self.flip_winding();
+        }
+    }
+
+    /// Flip the vertex winding of this hull facet.
+    #[inline]
+    pub fn flip_winding(&mut self) {
+        match self {
+            Self::Triangle([a, b, _]) => std::mem::swap(a, b),
+            Self::Rectangle([_, b, _, d]) => std::mem::swap(b, d),
+        }
+    }
+
+    /// Construct a new hull facet from a vertex set.
+    #[inline]
+    pub fn from_vertex_set(vs: VertexSet) -> Self {
+        match vs.len() {
+            3 => HullFacet::Triangle(
+                vs.vertices()
+                    .map(Vertex::to_exact)
+                    .collect::<ArrayVec<_, 3>>()
+                    .into_inner()
+                    .unwrap(),
+            ),
+            4 => {
+                let mut array = vs
+                    .vertices()
+                    .map(Vertex::to_exact)
+                    .collect::<ArrayVec<_, 4>>()
+                    .into_inner()
+                    .unwrap();
+                // Fix "Z" pattern.
+                array.swap(0, 1);
+                HullFacet::Rectangle(array)
+            }
+            _ => unreachable!("all facets must have 3 or 4 vertices!"),
         }
     }
 }
@@ -596,10 +647,10 @@ mod tests {
         assert_eq!(
             nz_ext_facet_set,
             hashset! {
-                HullFacet::Triangle([v(4), v(0), v(6)]),
+                HullFacet::Triangle([v(0), v(4), v(6)]),
                 HullFacet::Triangle([pz_center, v(7), v(5)]),
                 HullFacet::Rectangle([v(5), v(4), v(0), v(1)]),
-                HullFacet::Rectangle([v(5), v(4), v(6), v(7)]),
+                HullFacet::Rectangle([v(7), v(6), v(4), v(5)]),
             }
         );
 
@@ -608,11 +659,40 @@ mod tests {
         assert_eq!(
             pz_ext_facet_set,
             hashset! {
-                HullFacet::Triangle([v(3), v(1), v(5)]),
+                HullFacet::Triangle([v(1), v(3), v(5)]),
                 HullFacet::Triangle([nz_center, v(2), v(0)]),
-                HullFacet::Rectangle([v(3), v(2), v(0), v(1)]),
+                HullFacet::Rectangle([v(1), v(0), v(2), v(3)]),
                 HullFacet::Rectangle([v(5), v(4), v(0), v(1)]),
             }
         );
+    }
+
+    #[test]
+    fn n_valid_atoms() {
+        assert_eq!(Atom::generator().count(), 127);
+    }
+
+    #[test]
+    fn interior_winding() {
+        for (i, atom) in Atom::generator().enumerate() {
+            let centroid = atom.to_set().centroid();
+            println!("atom [{:03}] w/ centroid {} {:#}", i, centroid, atom);
+            for (j, facet) in atom.compound_hull().interior().facets().enumerate() {
+                println!("facet [{:02}]: {:?}", j, facet);
+                assert!(facet.is_normal_outwards_with_respect_to_point(&centroid));
+            }
+        }
+    }
+
+    #[test]
+    fn exterior_winding() {
+        for (_i, atom) in Atom::generator().enumerate() {
+            let centroid = atom.to_set().centroid();
+            // println!("atom [{:03}] w/ centroid {} {:#}", _i, centroid, atom);
+            for (_j, facet) in atom.compound_hull().exterior().facets().enumerate() {
+                // println!("facet [{:02}]: {:?}", _j, facet);
+                assert!(facet.is_normal_outwards_with_respect_to_point(&centroid));
+            }
+        }
     }
 }

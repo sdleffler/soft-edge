@@ -126,6 +126,28 @@ pub const POINTS: [Exact; 8] = [
     Exact(point!(2, 2, 2)),
 ];
 
+/// A plane, represented as a point on the plane and a normal vector (not necessarily guaranteed to
+/// be normalized).
+#[derive(Debug, Clone, Copy)]
+pub struct Plane {
+    /// A point on the plane.
+    pub p0: Point3<f32>,
+    /// A vector normal to the plane.
+    pub n: Vector3<f32>,
+}
+
+impl Plane {
+    /// Returns `true` if this point is on the same side as its normal ("above" the plane).
+    pub fn is_point_above(&self, p1: &Point3<f32>) -> bool {
+        (p1 - self.p0).dot(&self.n) > 0.
+    }
+
+    /// Returns `true` if this point is on the opposite side as its normal ("below" the plane).
+    pub fn is_point_below(&self, p1: &Point3<f32>) -> bool {
+        (p1 - self.p0).dot(&self.n) < 0.
+    }
+}
+
 /// A vertex of a cube, represented as a byte index encoded w/ three bits, each representing an axis
 /// as a boolean (true = 1, false = 0.) See the constants [`X_AXIS`], [`Y_AXIS`], [`Z_AXIS`] for a
 /// reference of which bits are which.
@@ -390,6 +412,62 @@ impl Axis {
     pub fn generator() -> impl Iterator<Item = Self> {
         (0u8..6).map(|b| unsafe { Self::from_u8_unchecked(b) })
     }
+
+    /// True if the face set for this axis requires a winding flip.
+    ///
+    /// This is likely not useful to you as a user, and is used internally inside the exterior hull
+    /// generation algorithm. But it is still useful to document for external understanding:
+    ///
+    /// # Winding order of exterior faces and face sets
+    ///
+    /// As a refresher, this is our vertex numbering scheme:
+    ///
+    /// ```text
+    ///   v3      v7
+    ///     *----*
+    /// v2 /| v6/|
+    ///   *----* |   +Y
+    ///   | *--|-*   ^ ^ +Z
+    ///   |/v1 |/v5  |/
+    ///   *----*     +--> +X
+    ///  v0    v4
+    /// ```
+    ///
+    /// We want all face windings to be in CCW order. Due to the fact that this order produces a
+    /// Z-pattern on each face set - e.g. `0, 1, 2, 3`, `0, 2, 4, 6`, `1, 3, 5, 7`, when sorted -
+    /// the exterior facet generation code will flip the first two vertices: `1, 0, 2, 3`, `2, 0, 4,
+    /// 6`, etc., producing what should ideally be a CCW-wound quad.
+    ///
+    /// Unfortunately this is not always the case. Note that the `NegY` axis's face set, when
+    /// sorted, produces `0, 1, 4, 5` for its Z-pattern, and `1, 0, 4, 5` for its wound-pattern.
+    /// Which, when viewed from below, is a clockwise winding, not counter-clockwise. As such,
+    /// unless a better descriptor of *why* stuff must be flipped, we'll need to just straight up
+    /// flip `NegY` to compensate.
+    ///
+    /// Axes that need to be flipped:
+    ///
+    /// - `NegX`
+    /// - `PosY`
+    /// - `NegZ`
+    ///
+    /// Axes that do not need to be flipped:
+    ///
+    /// - `PosX`
+    /// - `NegY`
+    /// - `PosZ`
+    ///
+    /// It seems like the reason that we need things to be flipped differently on the Y axis is that
+    /// this ordering is naturally *right-handed*, and our "world" coordinate system is left-handed.
+    /// This is just my hypothesis though, and frankly, as is, this flipping is strictly done
+    /// because it makes things work.
+    #[inline]
+    pub fn requires_winding_flip(self) -> bool {
+        use Axis::*;
+        match self {
+            NegX | PosY | NegZ => true,
+            PosX | NegY | PosZ => false,
+        }
+    }
 }
 
 /// A set of vertices represented as [`Vertex`]s.
@@ -509,12 +587,13 @@ impl VertexSet {
         self.bits.iter_ones().map(|i| Vertex::from_u8(i as u8))
     }
 
-    /// Returns `true` if the given subset is on the convex hull of this vertex set.
+    /// Returns `Some` with the plane of the subset if the given subset is on the convex hull of
+    /// this vertex set. Panicks if the subset is degenerate or non-coplanar.
     #[inline]
-    pub fn is_on_hull(self, subset: VertexSet) -> bool {
+    pub fn hull_plane(self, subset: VertexSet) -> Option<Plane> {
         assert!(
-            subset.len() >= 3 && subset.is_coplanar(),
-            "expected a non-degenerate coplanar subset"
+            subset.len() >= 3 && subset.is_coplanar() && subset.subset_of(self),
+            "expected a non-degenerate coplanar subset of this set"
         );
 
         // 1.) Find the plane on which this subset sits.
@@ -538,18 +617,47 @@ impl VertexSet {
         let first = match difference_vs.next() {
             // If there are no points which are not in the plane, then it's trivially on the hull
             // (it *is* the hull.)
-            None => return true,
+            None => return Some(Plane { p0, n }),
             Some(v) => v,
         };
 
         let sign = (first - p0).dot(&n) > 0.;
         // If they all have the same sign against the plane, then this subset is on the convex hull.
-        difference_vs.all(|p| ((p - p0).dot(&n) > 0.) == sign)
+        difference_vs
+            .all(|p| ((p - p0).dot(&n) > 0.) == sign)
+            .then(|| Plane { p0, n })
+    }
+
+    /// Returns true if the given subset is on the convex hull of this vertex set. Panicks if the
+    /// subset is degenerate or non-coplanar.
+    #[inline]
+    pub fn is_on_hull(self, subset: VertexSet) -> bool {
+        self.hull_plane(subset).is_some()
     }
 
     /// Convert this vertex set to the representative byte.
+    #[inline]
     pub fn to_u8(self) -> u8 {
         self.bits.into_inner()[0]
+    }
+
+    /// Create an iterator over all 256 possible vertex sets.
+    #[inline]
+    pub fn generator() -> impl Iterator<Item = Self> {
+        (0..=255u8).map(Self::from_u8)
+    }
+
+    /// Find the centroid in `f32` coordinates.
+    #[inline]
+    pub fn centroid(self) -> Point3<f32> {
+        let coords = self
+            .vertices()
+            .map(Vertex::to_f32)
+            .map(|p| p.coords)
+            .sum::<Vector3<f32>>()
+            / self.len() as f32;
+
+        Point3::from(coords)
     }
 }
 
@@ -689,6 +797,24 @@ pub struct Atom {
     vertices: VertexSet,
 }
 
+impl fmt::Display for Atom {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if !f.alternate() {
+            write!(f, "Atom({:?})", self.vertices.bits)
+        } else {
+            write!(f, "Atom([")?;
+            for (i, v) in self.vertices.vertices().enumerate() {
+                if i != 0 {
+                    write!(f, ", ")?;
+                }
+
+                write!(f, "{}", v.to_f32())?;
+            }
+            write!(f, "])")
+        }
+    }
+}
+
 impl Atom {
     /// Construct an atom from a vertex set. Panicks if the vertex set is coplanar/has zero volume.
     #[inline]
@@ -723,6 +849,12 @@ impl Atom {
     #[inline]
     pub fn to_u8(self) -> u8 {
         self.vertices.to_u8()
+    }
+
+    /// Create an iterator over all possible valid atoms.
+    #[inline]
+    pub fn generator() -> impl Iterator<Item = Self> {
+        VertexSet::generator().filter_map(|vs| Self::try_new(vs).ok())
     }
 }
 
