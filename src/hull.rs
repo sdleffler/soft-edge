@@ -155,8 +155,8 @@ impl Face {
                 .map(Vertex::to_exact);
 
             // Winding order.
-            if !self.axis().requires_winding_flip() {
-                verts.reverse();
+            if self.axis().requires_winding_flip() {
+                verts.swap(1, 3);
             }
 
             HullFacet::Rectangle(verts)
@@ -171,11 +171,11 @@ impl Face {
             // flip winding order
             if self.axis().requires_winding_flip() {
                 HullFacet::Triangle(
-                    [face_verts[v1], face_verts[v2], face_verts[v3]].map(Vertex::to_exact),
+                    [face_verts[v2], face_verts[v1], face_verts[v3]].map(Vertex::to_exact),
                 )
             } else {
                 HullFacet::Triangle(
-                    [face_verts[v2], face_verts[v1], face_verts[v3]].map(Vertex::to_exact),
+                    [face_verts[v1], face_verts[v2], face_verts[v3]].map(Vertex::to_exact),
                 )
             }
         };
@@ -186,9 +186,9 @@ impl Face {
 
             // flip winding order.
             if self.axis().requires_winding_flip() {
-                HullFacet::Triangle([center, face_verts[v1].to_exact(), face_verts[v2].to_exact()])
-            } else {
                 HullFacet::Triangle([center, face_verts[v2].to_exact(), face_verts[v1].to_exact()])
+            } else {
+                HullFacet::Triangle([center, face_verts[v1].to_exact(), face_verts[v2].to_exact()])
             }
         };
 
@@ -491,9 +491,9 @@ impl HullFacet {
     pub fn normal(self) -> UnitVector3<f32> {
         let (Self::Triangle([a, b, c]) | Self::Rectangle([a, b, c, _])) = self;
         let (p0, p1, p2) = (a.to_f32(), b.to_f32(), c.to_f32());
-        let v1 = p0 - p1;
-        let v2 = p2 - p1;
-        UnitVector3::new_normalize(v1.cross(&v2))
+        let v01 = p1 - p0;
+        let v02 = p2 - p0;
+        UnitVector3::new_normalize(v01.cross(&v02))
     }
 
     /// Test if this facet's normal faces outwards from a given point, such as the centroid of the
@@ -675,10 +675,10 @@ mod tests {
         assert_eq!(
             nz_ext_facet_set,
             hashset! {
-                HullFacet::Triangle([v(0), v(4), v(6)]),
-                HullFacet::Triangle([pz_center, v(7), v(5)]),
-                HullFacet::Rectangle([v(5), v(4), v(0), v(1)]),
-                HullFacet::Rectangle([v(7), v(6), v(4), v(5)]),
+                HullFacet::Triangle([v(4), v(0), v(6)]),
+                HullFacet::Triangle([pz_center, v(5), v(7)]),
+                HullFacet::Rectangle([v(1), v(0), v(4), v(5)]),
+                HullFacet::Rectangle([v(5), v(4), v(6), v(7)]),
             }
         );
 
@@ -687,10 +687,10 @@ mod tests {
         assert_eq!(
             pz_ext_facet_set,
             hashset! {
-                HullFacet::Triangle([v(1), v(3), v(5)]),
-                HullFacet::Triangle([nz_center, v(2), v(0)]),
-                HullFacet::Rectangle([v(1), v(0), v(2), v(3)]),
-                HullFacet::Rectangle([v(5), v(4), v(0), v(1)]),
+                HullFacet::Triangle([v(3), v(1), v(5)]),
+                HullFacet::Triangle([nz_center, v(0), v(2)]),
+                HullFacet::Rectangle([v(1), v(3), v(2), v(0)]),
+                HullFacet::Rectangle([v(1), v(0), v(4), v(5)]),
             }
         );
     }
