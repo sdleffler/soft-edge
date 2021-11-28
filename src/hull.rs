@@ -30,7 +30,7 @@ use crate::{Atom, Axis, Exact, Vertex, VertexSet, ANOMALOUS_CONFIGURATIONS, SYMM
 /// *Parallel faces share the same layout with respect to their other axes.* For example, a face on
 /// the `-Z` axis will have all of its vertices parallel w/ a face on the `Z` axis; the vertices are
 /// stored in the same order.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Face {
     bits: BitArray<Lsb0, [u8; 1]>,
 }
@@ -267,9 +267,9 @@ impl Face {
 /// (see [`ANOMALOUS_CONFIGURATIONS`].) These are simple to deal with as well, as they can never be
 /// collapsed into a quad, at least not within a single `Atom`, because these are the groups of
 /// three vertices which are alone on their plane within the cube.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub struct InteriorHull {
-    facets: ArrayVec<HullFacet, 8>,
+    facets: ArrayVec<HullFacet, 4>,
 }
 
 impl InteriorHull {
@@ -354,7 +354,7 @@ fn generate_interior_hull(atom: VertexSet) -> InteriorHull {
 /// and which may be clipped during `join` operations.
 ///
 /// Internally, this is a set of six [`Face`]s.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ExteriorHull {
     faces: ArrayVec<Face, 6>,
 }
@@ -412,7 +412,7 @@ impl ExteriorHull {
 ///
 /// In the end, the interior hull of an atom should never change; however, the exterior hull may
 /// change depending on adjacent atoms.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub struct CompoundHull {
     interior: InteriorHull,
     exterior: ExteriorHull,

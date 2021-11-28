@@ -1,7 +1,7 @@
 [package]
 name = "soft-edge"
 description = "efficient bithackery for making 3D collision meshes out of grids and stacked tile maps"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 authors = ["Shea 'Decibel' Leffler <shea@errno.com>"]
 license = "MIT OR Apache-2.0"
