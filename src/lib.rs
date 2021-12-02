@@ -904,6 +904,6 @@ pub struct Exact(pub Point3<i32>);
 impl Exact {
     /// Convert this exact vertex to a `Point3<f32>`.
     pub fn to_f32(self) -> Point3<f32> {
-        self.0.cast::<f32>()
+        self.0.cast::<f32>() / 2.
     }
 }
