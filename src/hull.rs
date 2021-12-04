@@ -1,8 +1,9 @@
-use std::fmt;
+use std::{collections::HashMap, fmt, ops::Deref};
 
 use arrayvec::ArrayVec;
 use bitvec::prelude::*;
 use nalgebra::*;
+use slab::Slab;
 
 use crate::{Atom, Axis, Exact, Vertex, VertexSet, ANOMALOUS_CONFIGURATIONS, SYMMETRIES};
 
@@ -236,6 +237,42 @@ impl Face {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Edge {
+    two_bits: VertexSet,
+}
+
+impl Edge {
+    pub fn new(v1: Vertex, v2: Vertex) -> Self {
+        Self {
+            two_bits: [v1, v2].into_iter().collect(),
+        }
+    }
+
+    pub fn to_set(self) -> VertexSet {
+        self.two_bits
+    }
+
+    pub fn generator() -> impl Iterator<Item = Edge> {
+        let vs: ArrayVec<Vertex, 8> = Vertex::generator().collect();
+        [
+            Self::new(vs[0], vs[1]),
+            Self::new(vs[1], vs[3]),
+            Self::new(vs[3], vs[2]),
+            Self::new(vs[2], vs[0]),
+            Self::new(vs[4], vs[5]),
+            Self::new(vs[5], vs[7]),
+            Self::new(vs[7], vs[6]),
+            Self::new(vs[6], vs[4]),
+            Self::new(vs[0], vs[4]),
+            Self::new(vs[1], vs[5]),
+            Self::new(vs[2], vs[6]),
+            Self::new(vs[3], vs[7]),
+        ]
+        .into_iter()
+    }
+}
+
 /// Triangles which lie on the planes of the faces of an atom are taken care of by `Face`s. However,
 /// we still need to complete the picture by adding back in any missing facets which lie "inside"
 /// that cube (and not on its faces.) There are 8 ways to choose 3 triangles from eight
@@ -416,6 +453,7 @@ impl ExteriorHull {
 pub struct CompoundHull {
     interior: InteriorHull,
     exterior: ExteriorHull,
+    edges: ArrayVec<Edge, 12>,
 }
 
 impl CompoundHull {
@@ -425,6 +463,9 @@ impl CompoundHull {
         Self {
             interior: InteriorHull::new(atom),
             exterior: ExteriorHull::new(atom),
+            edges: Edge::generator()
+                .filter(|&edge| edge.to_set().subset_of(atom.to_set()))
+                .collect(),
         }
     }
 
@@ -486,6 +527,14 @@ impl fmt::Debug for HullFacet {
 }
 
 impl HullFacet {
+    #[inline]
+    pub fn translated_by(self, v: Vector3<i32>) -> Self {
+        match self {
+            Self::Triangle([a, b, c]) => Self::Triangle([a + v, b + v, c + v]),
+            Self::Rectangle([a, b, c, d]) => Self::Rectangle([a + v, b + v, c + v, d + v]),
+        }
+    }
+
     /// Find the facet's normal.
     #[inline]
     pub fn normal(self) -> UnitVector3<f32> {
@@ -494,6 +543,21 @@ impl HullFacet {
         let v01 = p1 - p0;
         let v02 = p2 - p0;
         UnitVector3::new_normalize(v01.cross(&v02))
+    }
+
+    /// Calculated the scaled normal of the face (the un-normalized normal - yes, I know, silly
+    /// vocabulary) in such a way that it is exactly comparable.
+    ///
+    /// The actual scaling involved is undefined, but you can expect it is the same for any facet
+    /// from this library (so if facets were calculated from coplanar sets of vertices they will be
+    /// identical.)
+    #[inline]
+    pub fn discrete_scaled_normal(self) -> Vector3<i32> {
+        let (Self::Triangle([a, b, c]) | Self::Rectangle([a, b, c, _])) = self;
+        let (p0, p1, p2) = (a.0, b.0, c.0);
+        let v01 = p1 - p0;
+        let v02 = p2 - p0;
+        v01.cross(&v02)
     }
 
     /// Test if this facet's normal faces outwards from a given point, such as the centroid of the
@@ -548,6 +612,246 @@ impl HullFacet {
                 HullFacet::Rectangle(array)
             }
             _ => unreachable!("all facets must have 3 or 4 vertices!"),
+        }
+    }
+
+    #[inline]
+    pub fn edges(self) -> impl Iterator<Item = SortedPair<Exact>> {
+        match self {
+            HullFacet::Triangle([a, b, c]) => [
+                SortedPair::new(a, b),
+                SortedPair::new(b, c),
+                SortedPair::new(c, a),
+            ]
+            .into_iter()
+            .collect::<ArrayVec<SortedPair<Exact>, 5>>(),
+            HullFacet::Rectangle([a, b, c, d]) => [
+                SortedPair::new(a, b),
+                SortedPair::new(b, c),
+                SortedPair::new(a, c),
+                SortedPair::new(c, d),
+                SortedPair::new(d, a),
+            ]
+            .into_iter()
+            .collect::<ArrayVec<SortedPair<Exact>, 5>>(),
+        }
+        .into_iter()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SortedPair<T> {
+    tuple: (T, T),
+}
+
+impl<T: PartialOrd> SortedPair<T> {
+    pub fn new(a: T, b: T) -> Self {
+        if a < b {
+            Self { tuple: (a, b) }
+        } else {
+            Self { tuple: (b, a) }
+        }
+    }
+}
+
+impl<T> Deref for SortedPair<T> {
+    type Target = (T, T);
+    fn deref(&self) -> &Self::Target {
+        &self.tuple
+    }
+}
+
+#[derive(Debug)]
+enum EdgeStatus {
+    Extant(ArrayVec<usize, 2>),
+    Removed,
+}
+
+impl Default for EdgeStatus {
+    fn default() -> Self {
+        Self::Extant(ArrayVec::new())
+    }
+}
+
+impl EdgeStatus {
+    fn is_removed(&self) -> bool {
+        matches!(self, Self::Removed)
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct EdgeFilter {
+    facet_ids: HashMap<HullFacet, usize>,
+    edges: HashMap<SortedPair<Exact>, EdgeStatus>,
+    facets: Slab<HullFacet>,
+}
+
+impl EdgeFilter {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn clear(&mut self) {
+        self.facet_ids.clear();
+        self.edges.clear();
+        self.facets.clear();
+    }
+
+    /// Returns true if a facet containing the edge exists in the edge filter *and* the edge has not
+    /// been removed/made redundant.
+    pub fn edge_exists(&self, edge: SortedPair<Exact>) -> bool {
+        self.edges
+            .get(&edge)
+            .map_or(false, |status| !status.is_removed())
+    }
+
+    pub fn push(&mut self, facet: HullFacet) {
+        use std::collections::hash_map::Entry;
+
+        if let Entry::Vacant(vacant) = self.facet_ids.entry(facet) {
+            let facet_id = self.facets.insert(facet);
+            vacant.insert(facet_id);
+            let facet_dsn = facet.discrete_scaled_normal();
+
+            // println!(
+            //     "Fresh facet (id {}) with dsn {:?}: {:?}",
+            //     facet_id, facet_dsn, facet
+            // );
+
+            'register_edges: for edge in facet.edges() {
+                let entry = self.edges.entry(edge).or_default();
+                let associated_facets = match entry {
+                    EdgeStatus::Extant(associated) => associated,
+                    EdgeStatus::Removed => continue,
+                };
+
+                // This loop exists as a sort of pseudo-goto in order to get around some
+                // borrowchecking stuff. Breaking from it interrupts the borrow of
+                // `associated_facets`. It will only ever hit the setting of the edge status to
+                // `Removed` if it doesn't naturally finish the for loop inside.
+                'remove: loop {
+                    for &associated_facet in associated_facets.iter() {
+                        // If we have another facet which is attached to this same edge and which
+                        // shares a plane w/ this facet, then this edge is to be filtered out.
+                        let associated_dsn = self.facets[associated_facet].discrete_scaled_normal();
+                        if associated_dsn == facet_dsn || -associated_dsn == facet_dsn {
+                            // println!(
+                            //     "edge {:?} due to facets {} and {}",
+                            //     edge, facet_id, associated_facet
+                            // );
+                            break 'remove;
+                        }
+                    }
+
+                    associated_facets.push(facet_id);
+                    continue 'register_edges;
+                }
+
+                *entry = EdgeStatus::Removed;
+            }
+        }
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = SortedPair<Exact>> + '_ {
+        self.edges
+            .iter()
+            .filter(|(_, status)| !status.is_removed())
+            .map(|(&e, _)| e)
+    }
+}
+
+impl Extend<HullFacet> for EdgeFilter {
+    fn extend<T: IntoIterator<Item = HullFacet>>(&mut self, iter: T) {
+        for facet in iter {
+            self.push(facet);
+        }
+    }
+}
+
+#[derive(Debug)]
+enum VertexStatus {
+    Extant(ArrayVec<usize, 8>),
+    Removed,
+}
+
+impl Default for VertexStatus {
+    fn default() -> Self {
+        Self::Extant(ArrayVec::new())
+    }
+}
+
+impl VertexStatus {
+    fn is_removed(&self) -> bool {
+        matches!(self, Self::Removed)
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct VertexFilter {
+    edge_ids: HashMap<SortedPair<Exact>, usize>,
+    vertices: HashMap<Exact, VertexStatus>,
+    edges: Slab<SortedPair<Exact>>,
+}
+
+impl VertexFilter {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn clear(&mut self) {
+        self.edge_ids.clear();
+        self.vertices.clear();
+        self.edges.clear();
+    }
+
+    /// Returns true if a facet containing the edge exists in the edge filter *and* the edge has not
+    /// been removed/made redundant.
+    pub fn vertex_exists(&self, vertex: Exact) -> bool {
+        self.vertices
+            .get(&vertex)
+            .map_or(false, |status| !status.is_removed())
+    }
+
+    pub fn push(&mut self, edge: SortedPair<Exact>) {
+        use std::collections::hash_map::Entry;
+
+        if let Entry::Vacant(vacant) = self.edge_ids.entry(edge) {
+            let edge_id = self.edges.insert(edge);
+            vacant.insert(edge_id);
+            let edge_dir = edge.1 .0 - edge.0 .0;
+
+            'register_vertices: for vertex in [edge.0, edge.1] {
+                let entry = self.vertices.entry(vertex).or_default();
+                let associated_edges = match entry {
+                    VertexStatus::Extant(associated) => associated,
+                    VertexStatus::Removed => continue,
+                };
+
+                'remove: loop {
+                    for &associated_edge_id in associated_edges.iter() {
+                        let associated_edge = &self.edges[associated_edge_id];
+                        // If we have another edge which is attached to this same vertex and which
+                        // shares a direction w/ this edge, then this vertex is to be filtered out.
+                        let associated_dir = associated_edge.1 .0 - associated_edge.0 .0;
+                        if associated_dir == edge_dir || -associated_dir == edge_dir {
+                            break 'remove;
+                        }
+                    }
+
+                    associated_edges.push(edge_id);
+                    continue 'register_vertices;
+                }
+
+                *entry = VertexStatus::Removed;
+            }
+        }
+    }
+}
+
+impl Extend<SortedPair<Exact>> for VertexFilter {
+    fn extend<T: IntoIterator<Item = SortedPair<Exact>>>(&mut self, iter: T) {
+        for edge in iter {
+            self.push(edge);
         }
     }
 }
@@ -722,5 +1026,39 @@ mod tests {
                 assert!(facet.is_normal_outwards_with_respect_to_point(&centroid));
             }
         }
+    }
+
+    #[test]
+    fn edge_filter() {
+        let ramp_negz = Atom::new(vertex_set![1, 0, 1, 0, 1, 1, 1, 1]);
+        let ramp_negz_coords = Vector3::new(0, 0, 0);
+        let ramp_posz = Atom::new(vertex_set![1, 1, 1, 1, 1, 0, 1, 0]);
+        let ramp_posz_coords = Vector3::new(0, 1, 0);
+
+        let mut ramp_negz_hull = ramp_negz.compound_hull();
+        let mut ramp_posz_hull = ramp_posz.compound_hull();
+        ramp_negz_hull.join_exteriors(Axis::PosY, &mut ramp_posz_hull);
+
+        let mut edge_filter = EdgeFilter::new();
+        edge_filter.extend(
+            ramp_negz_hull
+                .facets()
+                .map(|facet| facet.translated_by(ramp_negz_coords)),
+        );
+        edge_filter.extend(
+            ramp_posz_hull
+                .facets()
+                .map(|facet| facet.translated_by(ramp_posz_coords)),
+        );
+
+        assert!(!edge_filter.edge_exists(SortedPair::new(
+            Exact(Point3::new(0, 2, 0)),
+            Exact(Point3::new(2, 2, 0))
+        )));
+        assert!(edge_filter.edge_exists(SortedPair::new(
+            Exact(Point3::new(1, 2, 1)),
+            Exact(Point3::new(0, 2, 0))
+        )));
+        assert_eq!(edge_filter.iter().count(), 27);
     }
 }

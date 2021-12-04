@@ -15,6 +15,7 @@ categories = ["algorithms", "data-structures", "game-development", "mathematics"
 arrayvec = "0.7.2"
 bitvec = "0.22.3"
 nalgebra = "0.29.0"
+slab = "0.4.5"
 thiserror = "1.0.30"
 
 [profile.dev]

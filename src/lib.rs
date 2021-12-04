@@ -100,10 +100,10 @@
 
 use arrayvec::ArrayVec;
 use bitvec::prelude::*;
-use std::fmt;
 use std::ops::{
     BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Not, Sub, SubAssign,
 };
+use std::{fmt, ops::Add};
 
 use nalgebra::*;
 
@@ -200,6 +200,50 @@ impl Vertex {
     #[inline]
     pub fn to_set(self) -> VertexSet {
         VertexSet::new() | self
+    }
+
+    /// "Shift" this vertex by half a cube along an axis. Essentially, given an axis, this matches a
+    /// vertex from a given face parallel to that axis to the vertex on the opposite face parallel
+    /// to that axis.
+    #[inline]
+    pub fn shift(self, axis: Axis) -> Self {
+        let byte = match axis {
+            Axis::PosX | Axis::NegX => match self.to_u8() {
+                0 => 4,
+                1 => 5,
+                2 => 6,
+                3 => 7,
+                4 => 0,
+                5 => 1,
+                6 => 2,
+                7 => 3,
+                _ => unreachable!(),
+            },
+            Axis::PosY | Axis::NegY => match self.to_u8() {
+                0 => 2,
+                1 => 3,
+                2 => 0,
+                3 => 1,
+                4 => 6,
+                5 => 7,
+                6 => 4,
+                7 => 5,
+                _ => unreachable!(),
+            },
+            Axis::PosZ | Axis::NegZ => match self.to_u8() {
+                0 => 1,
+                1 => 0,
+                2 => 3,
+                3 => 2,
+                4 => 5,
+                5 => 4,
+                6 => 7,
+                7 => 6,
+                _ => unreachable!(),
+            },
+        };
+
+        Self::from_u8(byte)
     }
 }
 
@@ -445,6 +489,11 @@ impl Axis {
     #[inline]
     pub fn generator() -> impl Iterator<Item = Self> {
         (0u8..6).map(|b| unsafe { Self::from_u8_unchecked(b) })
+    }
+
+    #[inline]
+    pub fn iter_orthogonal(self) -> impl Iterator<Item = Self> {
+        Self::generator().filter(move |axis| !axis.is_parallel(self))
     }
 
     /// True if the face set for this axis requires a winding flip.
@@ -905,5 +954,12 @@ impl Exact {
     /// Convert this exact vertex to a `Point3<f32>`.
     pub fn to_f32(self) -> Point3<f32> {
         self.0.cast::<f32>() / 2.
+    }
+}
+
+impl Add<Vector3<i32>> for Exact {
+    type Output = Self;
+    fn add(self, rhs: Vector3<i32>) -> Self::Output {
+        Exact(self.0 + rhs * 2)
     }
 }
