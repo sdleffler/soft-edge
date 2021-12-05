@@ -616,7 +616,7 @@ impl HullFacet {
     }
 
     #[inline]
-    pub fn edges(self) -> impl Iterator<Item = SortedPair<Exact>> {
+    fn exterior_edges(self) -> impl Iterator<Item = SortedPair<Exact>> {
         match self {
             HullFacet::Triangle([a, b, c]) => [
                 SortedPair::new(a, b),
@@ -624,18 +624,29 @@ impl HullFacet {
                 SortedPair::new(c, a),
             ]
             .into_iter()
-            .collect::<ArrayVec<SortedPair<Exact>, 5>>(),
+            .collect::<ArrayVec<SortedPair<Exact>, 6>>(),
             HullFacet::Rectangle([a, b, c, d]) => [
                 SortedPair::new(a, b),
                 SortedPair::new(b, c),
                 SortedPair::new(a, c),
                 SortedPair::new(c, d),
                 SortedPair::new(d, a),
+                SortedPair::new(c, a),
             ]
             .into_iter()
-            .collect::<ArrayVec<SortedPair<Exact>, 5>>(),
+            .collect::<ArrayVec<SortedPair<Exact>, 6>>(),
         }
         .into_iter()
+    }
+
+    #[inline]
+    pub fn interior_edges(self) -> impl Iterator<Item = SortedPair<Exact>> {
+        match self {
+            HullFacet::Triangle(_) => ArrayVec::new().into_iter(),
+            HullFacet::Rectangle([a, b, c, d]) => {
+                ArrayVec::from([SortedPair::new(a, c), SortedPair::new(b, d)]).into_iter()
+            }
+        }
     }
 }
 
@@ -644,7 +655,7 @@ pub struct SortedPair<T> {
     tuple: (T, T),
 }
 
-impl<T: PartialOrd> SortedPair<T> {
+impl<T: Ord> SortedPair<T> {
     pub fn new(a: T, b: T) -> Self {
         if a < b {
             Self { tuple: (a, b) }
@@ -697,12 +708,11 @@ impl EdgeFilter {
         self.facets.clear();
     }
 
-    /// Returns true if a facet containing the edge exists in the edge filter *and* the edge has not
-    /// been removed/made redundant.
+    /// Returns true if a facet containing the edge has not been removed/made redundant.
     pub fn edge_exists(&self, edge: SortedPair<Exact>) -> bool {
         self.edges
             .get(&edge)
-            .map_or(false, |status| !status.is_removed())
+            .map_or(true, |status| !status.is_removed())
     }
 
     pub fn push(&mut self, facet: HullFacet) {
@@ -718,7 +728,7 @@ impl EdgeFilter {
             //     facet_id, facet_dsn, facet
             // );
 
-            'register_edges: for edge in facet.edges() {
+            'register_edges: for edge in facet.exterior_edges() {
                 let entry = self.edges.entry(edge).or_default();
                 let associated_facets = match entry {
                     EdgeStatus::Extant(associated) => associated,
@@ -752,10 +762,24 @@ impl EdgeFilter {
         }
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = SortedPair<Exact>> + '_ {
+    /// Returns pairs `(edge, is_extant)`.
+    pub fn iter(&self) -> impl Iterator<Item = (SortedPair<Exact>, bool)> + '_ {
+        self.edges
+            .iter()
+            .map(|(&e, status)| (e, !status.is_removed()))
+    }
+
+    pub fn iter_extant(&self) -> impl Iterator<Item = SortedPair<Exact>> + '_ {
         self.edges
             .iter()
             .filter(|(_, status)| !status.is_removed())
+            .map(|(&e, _)| e)
+    }
+
+    pub fn iter_removed(&self) -> impl Iterator<Item = SortedPair<Exact>> + '_ {
+        self.edges
+            .iter()
+            .filter(|(_, status)| status.is_removed())
             .map(|(&e, _)| e)
     }
 }
@@ -1029,7 +1053,7 @@ mod tests {
     }
 
     #[test]
-    fn edge_filter() {
+    fn edge_filter_ramps() {
         let ramp_negz = Atom::new(vertex_set![1, 0, 1, 0, 1, 1, 1, 1]);
         let ramp_negz_coords = Vector3::new(0, 0, 0);
         let ramp_posz = Atom::new(vertex_set![1, 1, 1, 1, 1, 0, 1, 0]);
@@ -1059,6 +1083,61 @@ mod tests {
             Exact(Point3::new(1, 2, 1)),
             Exact(Point3::new(0, 2, 0))
         )));
-        assert_eq!(edge_filter.iter().count(), 27);
+
+        assert_eq!(edge_filter.iter_extant().count(), 20);
+        assert_eq!(edge_filter.iter_removed().count(), 7);
+    }
+
+    #[test]
+    fn edge_filter_cubes() {
+        let cube = Atom::new(vertex_set![1, 1, 1, 1, 1, 1, 1, 1]);
+        let cube_negy_coords = Vector3::new(0, 0, 0);
+        let cube_posy_coords = Vector3::new(0, 1, 0);
+
+        let mut cube_negy_hull = cube.compound_hull();
+        let mut cube_posy_hull = cube.compound_hull();
+        cube_negy_hull.join_exteriors(Axis::PosY, &mut cube_posy_hull);
+
+        let mut edge_filter = EdgeFilter::new();
+        edge_filter.extend(
+            cube_negy_hull
+                .facets()
+                .map(|facet| facet.translated_by(cube_negy_coords)),
+        );
+        edge_filter.extend(
+            cube_posy_hull
+                .facets()
+                .map(|facet| facet.translated_by(cube_posy_coords)),
+        );
+
+        assert!(!edge_filter.edge_exists(SortedPair::new(
+            Exact(Point3::new(0, 2, 0)),
+            Exact(Point3::new(0, 2, 2))
+        )));
+        assert!(edge_filter.edge_exists(SortedPair::new(
+            Exact(Point3::new(0, 0, 0)),
+            Exact(Point3::new(0, 2, 0))
+        )));
+        let mut edges = edge_filter.iter_extant().collect::<Vec<_>>();
+        edges.sort_by_key(|e| {
+            [
+                e.0 .0.coords.x,
+                e.0 .0.coords.y,
+                e.0 .0.coords.z,
+                e.1 .0.coords.x,
+                e.1 .0.coords.y,
+                e.1 .0.coords.z,
+            ]
+        });
+        assert_eq!(edge_filter.iter_extant().count(), 16);
+        assert_eq!(edge_filter.iter_removed().count(), 14);
+    }
+
+    #[test]
+    fn sorted_pair() {
+        assert_eq!(
+            SortedPair::new(Exact(Point3::new(0, 0, 0)), Exact(Point3::new(0, 2, 0))),
+            SortedPair::new(Exact(Point3::new(0, 2, 0)), Exact(Point3::new(0, 0, 0)))
+        );
     }
 }

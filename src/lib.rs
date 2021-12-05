@@ -100,8 +100,9 @@
 
 use arrayvec::ArrayVec;
 use bitvec::prelude::*;
-use std::ops::{
-    BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Not, Sub, SubAssign,
+use std::{
+    cmp::Ordering,
+    ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Not, Sub, SubAssign},
 };
 use std::{fmt, ops::Add};
 
@@ -947,7 +948,7 @@ impl Atom {
 /// do this so that we can represent facets which have vertices necessarily in the center of a side.
 /// This allows us to exactly represent all the vertices of a mesh of joined atoms, in a way which
 /// can be conveniently hashed and exactly compared in order to deduplicate vertex indices.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Exact(pub Point3<i32>);
 
 impl Exact {
@@ -961,5 +962,17 @@ impl Add<Vector3<i32>> for Exact {
     type Output = Self;
     fn add(self, rhs: Vector3<i32>) -> Self::Output {
         Exact(self.0 + rhs * 2)
+    }
+}
+
+impl PartialOrd for Exact {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Exact {
+    fn cmp(&self, other: &Self) -> Ordering {
+        [self.0.x, self.0.y, self.0.z].cmp(&[other.0.x, other.0.y, other.0.z])
     }
 }
