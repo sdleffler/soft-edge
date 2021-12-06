@@ -690,11 +690,36 @@ impl EdgeStatus {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct FilteredFacet {
+    facet: HullFacet,
+    /// The discrete scaled normal of the facet.
+    dsn: Vector3<i32>,
+    atom_coords: Vector3<i32>,
+}
+
+impl FilteredFacet {
+    fn new(atom_coords: Vector3<i32>, facet: HullFacet) -> Self {
+        Self {
+            facet,
+            dsn: facet.discrete_scaled_normal(),
+            atom_coords,
+        }
+    }
+
+    fn find_perpendicular_axis(&self, other: &FilteredFacet) -> Vector3<i32> {
+        let tmp = other.atom_coords - self.atom_coords;
+        let parallel_axis = self.dsn.cross(&tmp);
+        let perpendicular_axis = self.dsn.cross(&parallel_axis);
+        perpendicular_axis
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct EdgeFilter {
     facet_ids: HashMap<HullFacet, usize>,
     edges: HashMap<SortedPair<Exact>, EdgeStatus>,
-    facets: Slab<HullFacet>,
+    facets: Slab<FilteredFacet>,
 }
 
 impl EdgeFilter {
@@ -715,20 +740,20 @@ impl EdgeFilter {
             .map_or(true, |status| !status.is_removed())
     }
 
-    pub fn push(&mut self, facet: HullFacet) {
+    pub fn push(&mut self, atom_coords: Vector3<i32>, facet: HullFacet) {
         use std::collections::hash_map::Entry;
 
         if let Entry::Vacant(vacant) = self.facet_ids.entry(facet) {
-            let facet_id = self.facets.insert(facet);
+            let filtered_facet = FilteredFacet::new(atom_coords, facet);
+            let facet_id = self.facets.insert(filtered_facet);
             vacant.insert(facet_id);
-            let facet_dsn = facet.discrete_scaled_normal();
 
             // println!(
             //     "Fresh facet (id {}) with dsn {:?}: {:?}",
             //     facet_id, facet_dsn, facet
             // );
 
-            'register_edges: for edge in facet.exterior_edges() {
+            'register_edges: for edge in filtered_facet.facet.exterior_edges() {
                 let entry = self.edges.entry(edge).or_default();
                 let associated_facets = match entry {
                     EdgeStatus::Extant(associated) => associated,
@@ -740,17 +765,57 @@ impl EdgeFilter {
                 // `associated_facets`. It will only ever hit the setting of the edge status to
                 // `Removed` if it doesn't naturally finish the for loop inside.
                 'remove: loop {
-                    for &associated_facet in associated_facets.iter() {
+                    for &associated_facet_id in associated_facets.iter() {
+                        let associated_facet = &self.facets[associated_facet_id];
+                        let same_atom = filtered_facet.atom_coords == associated_facet.atom_coords;
+                        let filtered_out = if same_atom {
+                            // If these two facets come from the same atom, then the perp axis trick
+                            // won't work, because the difference in their coordinates is zero. But,
+                            // since they're from the same atom, we can just directly compare their
+                            // normals.
+                            filtered_facet.dsn == associated_facet.dsn
+                        } else {
+                            // If they *don't* come from the same atom, we can find a vector which
+                            // is parallel to the first facet, perpendicular to the edge and the
+                            // first facet's normal, and points towards the second facet.
+                            // Projecting the second facet's normal on that vector will tell us
+                            // whether the angle is less than or equal to 180 degrees (<= 0) or
+                            // greater than 180 degrees (> 0.)
+                            let perp_axis =
+                                filtered_facet.find_perpendicular_axis(associated_facet);
+                            perp_axis.dot(&associated_facet.dsn) <= 0
+                        };
+
                         // If we have another facet which is attached to this same edge and which
-                        // shares a plane w/ this facet, then this edge is to be filtered out.
-                        let associated_dsn = self.facets[associated_facet].discrete_scaled_normal();
-                        if associated_dsn == facet_dsn || -associated_dsn == facet_dsn {
+                        // forms a <= 180 degree angle with this this facet, remove the edge.
+                        if filtered_out {
                             // println!(
-                            //     "edge {:?} due to facets {} and {}",
-                            //     edge, facet_id, associated_facet
+                            //     "edge {} <=> {} due to facets ({}, {}) and ({}, {})\n\t\
+                            //         dsn: {}, associated_dsn: {}",
+                            //     edge.0 .0,
+                            //     edge.1 .0,
+                            //     Point3::from(atom_coords),
+                            //     facet_id,
+                            //     Point3::from(associated_facet.atom_coords),
+                            //     associated_facet_id,
+                            //     Point3::from(filtered_facet.dsn),
+                            //     Point3::from(associated_facet.dsn),
                             // );
                             break 'remove;
                         }
+
+                        // // If we have another facet which is attached to this same edge and which
+                        // // shares a plane w/ this facet, then this edge is to be filtered out.
+                        // if associated_facet.dsn == facet.dsn
+                        //     || -associated_facet.dsn
+                        //         == facet.dsn
+                        // {
+                        //     // println!(
+                        //     //     "edge {:?} due to facets {} and {}",
+                        //     //     edge, facet_id, associated_facet
+                        //     // );
+                        //     break 'remove;
+                        // }
                     }
 
                     associated_facets.push(facet_id);
@@ -784,10 +849,10 @@ impl EdgeFilter {
     }
 }
 
-impl Extend<HullFacet> for EdgeFilter {
-    fn extend<T: IntoIterator<Item = HullFacet>>(&mut self, iter: T) {
-        for facet in iter {
-            self.push(facet);
+impl Extend<(Vector3<i32>, HullFacet)> for EdgeFilter {
+    fn extend<T: IntoIterator<Item = (Vector3<i32>, HullFacet)>>(&mut self, iter: T) {
+        for (atom_coord, facet) in iter {
+            self.push(atom_coord, facet);
         }
     }
 }
@@ -1067,12 +1132,12 @@ mod tests {
         edge_filter.extend(
             ramp_negz_hull
                 .facets()
-                .map(|facet| facet.translated_by(ramp_negz_coords)),
+                .map(|facet| (ramp_negz_coords, facet.translated_by(ramp_negz_coords))),
         );
         edge_filter.extend(
             ramp_posz_hull
                 .facets()
-                .map(|facet| facet.translated_by(ramp_posz_coords)),
+                .map(|facet| (ramp_posz_coords, facet.translated_by(ramp_posz_coords))),
         );
 
         assert!(!edge_filter.edge_exists(SortedPair::new(
@@ -1089,7 +1154,7 @@ mod tests {
     }
 
     #[test]
-    fn edge_filter_cubes() {
+    fn edge_filter_face_adjacent_cubes() {
         let cube = Atom::new(vertex_set![1, 1, 1, 1, 1, 1, 1, 1]);
         let cube_negy_coords = Vector3::new(0, 0, 0);
         let cube_posy_coords = Vector3::new(0, 1, 0);
@@ -1102,12 +1167,12 @@ mod tests {
         edge_filter.extend(
             cube_negy_hull
                 .facets()
-                .map(|facet| facet.translated_by(cube_negy_coords)),
+                .map(|facet| (cube_negy_coords, facet.translated_by(cube_negy_coords))),
         );
         edge_filter.extend(
             cube_posy_hull
                 .facets()
-                .map(|facet| facet.translated_by(cube_posy_coords)),
+                .map(|facet| (cube_posy_coords, facet.translated_by(cube_posy_coords))),
         );
 
         assert!(!edge_filter.edge_exists(SortedPair::new(
@@ -1131,6 +1196,50 @@ mod tests {
         });
         assert_eq!(edge_filter.iter_extant().count(), 16);
         assert_eq!(edge_filter.iter_removed().count(), 14);
+    }
+
+    #[test]
+    fn edge_filter_edge_adjacent_cubes() {
+        let cube = Atom::new(vertex_set![1, 1, 1, 1, 1, 1, 1, 1]);
+        let cube0_coords = Vector3::new(0, 0, 0);
+        let cube1_coords = Vector3::new(0, 1, 1);
+
+        let cube0_hull = cube.compound_hull();
+        let cube1_hull = cube.compound_hull();
+
+        let mut edge_filter = EdgeFilter::new();
+        edge_filter.extend(
+            cube0_hull
+                .facets()
+                .map(|facet| (cube0_coords, facet.translated_by(cube0_coords))),
+        );
+        edge_filter.extend(
+            cube1_hull
+                .facets()
+                .map(|facet| (cube1_coords, facet.translated_by(cube1_coords))),
+        );
+
+        assert!(!edge_filter.edge_exists(SortedPair::new(
+            Exact(Point3::new(2, 2, 2)),
+            Exact(Point3::new(0, 2, 2))
+        )));
+        assert!(edge_filter.edge_exists(SortedPair::new(
+            Exact(Point3::new(0, 0, 0)),
+            Exact(Point3::new(0, 2, 0))
+        )));
+        let mut edges = edge_filter.iter_extant().collect::<Vec<_>>();
+        edges.sort_by_key(|e| {
+            [
+                e.0 .0.coords.x,
+                e.0 .0.coords.y,
+                e.0 .0.coords.z,
+                e.1 .0.coords.x,
+                e.1 .0.coords.y,
+                e.1 .0.coords.z,
+            ]
+        });
+        assert_eq!(edge_filter.iter_extant().count(), 22);
+        assert_eq!(edge_filter.iter_removed().count(), 13);
     }
 
     #[test]
