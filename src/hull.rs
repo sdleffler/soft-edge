@@ -237,22 +237,27 @@ impl Face {
     }
 }
 
+/// A set of exactly two distinct vertices, representing an edge of an atom.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Edge {
     two_bits: VertexSet,
 }
 
 impl Edge {
+    /// Create a new edge from a pair of vertices.
     pub fn new(v1: Vertex, v2: Vertex) -> Self {
+        assert_ne!(v1, v2, "edges must consist of two distinct vertices!");
         Self {
             two_bits: [v1, v2].into_iter().collect(),
         }
     }
 
+    /// Convert this pair of vertices to a [`VertexSet`].
     pub fn to_set(self) -> VertexSet {
         self.two_bits
     }
 
+    /// Iterate over all possible edges of the unit cube (12 in total.)
     pub fn generator() -> impl Iterator<Item = Edge> {
         let vs: ArrayVec<Vertex, 8> = Vertex::generator().collect();
         [
@@ -527,6 +532,8 @@ impl fmt::Debug for HullFacet {
 }
 
 impl HullFacet {
+    /// Translate every point in the facet by the given vector *in atom coordinates* (not exact
+    /// coordinates.)
     #[inline]
     pub fn translated_by(self, v: Vector3<i32>) -> Self {
         match self {
@@ -639,23 +646,27 @@ impl HullFacet {
         .into_iter()
     }
 
-    #[inline]
-    pub fn interior_edges(self) -> impl Iterator<Item = SortedPair<Exact>> {
-        match self {
-            HullFacet::Triangle(_) => ArrayVec::new().into_iter(),
-            HullFacet::Rectangle([a, b, c, d]) => {
-                ArrayVec::from([SortedPair::new(a, c), SortedPair::new(b, d)]).into_iter()
-            }
-        }
-    }
+    // #[inline]
+    // pub fn interior_edges(self) -> impl Iterator<Item = SortedPair<Exact>> {
+    //     match self {
+    //         HullFacet::Triangle(_) => ArrayVec::new().into_iter(),
+    //         HullFacet::Rectangle([a, b, c, d]) => {
+    //             ArrayVec::from([SortedPair::new(a, c), SortedPair::new(b, d)]).into_iter()
+    //         }
+    //     }
+    // }
 }
 
+/// A sorted pair of values. Useful to represent an unordered pair as a key in a hashmap/ordered
+/// map.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SortedPair<T> {
     tuple: (T, T),
 }
 
 impl<T: Ord> SortedPair<T> {
+    /// Create a new sorted pair, swapping the order of the two elements if necessary to preserve
+    /// the ordering property.
     pub fn new(a: T, b: T) -> Self {
         if a < b {
             Self { tuple: (a, b) }
@@ -710,11 +721,16 @@ impl FilteredFacet {
     fn find_perpendicular_axis(&self, other: &FilteredFacet) -> Vector3<i32> {
         let tmp = other.atom_coords - self.atom_coords;
         let parallel_axis = self.dsn.cross(&tmp);
-        let perpendicular_axis = self.dsn.cross(&parallel_axis);
+        let perpendicular_axis = parallel_axis.cross(&self.dsn);
         perpendicular_axis
     }
 }
 
+/// A data structure for building a set of edges which are considered "interior" and irrelevant to
+/// collision normals.
+///
+/// Any collision with a removed edge should be considered to instead be a collision with the normal
+/// of the facet the collision occurred on.
 #[derive(Debug, Default)]
 pub struct EdgeFilter {
     facet_ids: HashMap<HullFacet, usize>,
@@ -723,10 +739,12 @@ pub struct EdgeFilter {
 }
 
 impl EdgeFilter {
+    /// Create an empty edge filter.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Clear the edge filter, retaining allocated memory for reuse.
     pub fn clear(&mut self) {
         self.facet_ids.clear();
         self.edges.clear();
@@ -740,6 +758,9 @@ impl EdgeFilter {
             .map_or(true, |status| !status.is_removed())
     }
 
+    /// Push all edges of a facet into the filter. This method requires the coordinates of the atom
+    /// the facet is coming from as well, as it may be used to calculate a basis to decide whether
+    /// two faces are at a less or greater than parallel angle.
     pub fn push(&mut self, atom_coords: Vector3<i32>, facet: HullFacet) {
         use std::collections::hash_map::Entry;
 
@@ -768,6 +789,7 @@ impl EdgeFilter {
                     for &associated_facet_id in associated_facets.iter() {
                         let associated_facet = &self.facets[associated_facet_id];
                         let same_atom = filtered_facet.atom_coords == associated_facet.atom_coords;
+                        // let mut debug_perp_axis = None;
                         let filtered_out = if same_atom {
                             // If these two facets come from the same atom, then the perp axis trick
                             // won't work, because the difference in their coordinates is zero. But,
@@ -783,24 +805,31 @@ impl EdgeFilter {
                             // greater than 180 degrees (> 0.)
                             let perp_axis =
                                 filtered_facet.find_perpendicular_axis(associated_facet);
+                            // debug_perp_axis = Some(perp_axis);
                             perp_axis.dot(&associated_facet.dsn) <= 0
                         };
+
+                        // println!(
+                        //     "{} edge {} <=> {} due to facets ({}, {}) and ({}, {})\n\t\
+                        //             perp_axis: {}, dsn: {}, associated_dsn: {}",
+                        //     if !filtered_out { "KEEP" } else { "REMOVE" },
+                        //     edge.0 .0,
+                        //     edge.1 .0,
+                        //     Point3::from(atom_coords),
+                        //     facet_id,
+                        //     Point3::from(associated_facet.atom_coords),
+                        //     associated_facet_id,
+                        //     match debug_perp_axis {
+                        //         Some(axis) => format!("{}", Point3::from(axis)),
+                        //         None => "None".to_owned(),
+                        //     },
+                        //     Point3::from(filtered_facet.dsn),
+                        //     Point3::from(associated_facet.dsn),
+                        // );
 
                         // If we have another facet which is attached to this same edge and which
                         // forms a <= 180 degree angle with this this facet, remove the edge.
                         if filtered_out {
-                            // println!(
-                            //     "edge {} <=> {} due to facets ({}, {}) and ({}, {})\n\t\
-                            //         dsn: {}, associated_dsn: {}",
-                            //     edge.0 .0,
-                            //     edge.1 .0,
-                            //     Point3::from(atom_coords),
-                            //     facet_id,
-                            //     Point3::from(associated_facet.atom_coords),
-                            //     associated_facet_id,
-                            //     Point3::from(filtered_facet.dsn),
-                            //     Point3::from(associated_facet.dsn),
-                            // );
                             break 'remove;
                         }
 
@@ -827,13 +856,14 @@ impl EdgeFilter {
         }
     }
 
-    /// Returns pairs `(edge, is_extant)`.
-    pub fn iter(&self) -> impl Iterator<Item = (SortedPair<Exact>, bool)> + '_ {
+    /// Returns pairs `(is_removed, edge)`.
+    pub fn iter(&self) -> impl Iterator<Item = (bool, SortedPair<Exact>)> + '_ {
         self.edges
             .iter()
-            .map(|(&e, status)| (e, !status.is_removed()))
+            .map(|(&e, status)| (status.is_removed(), e))
     }
 
+    /// Returns an iterator over all extant (non-removed) edges.
     pub fn iter_extant(&self) -> impl Iterator<Item = SortedPair<Exact>> + '_ {
         self.edges
             .iter()
@@ -841,6 +871,7 @@ impl EdgeFilter {
             .map(|(&e, _)| e)
     }
 
+    /// Returns an iterator over all removed edges.
     pub fn iter_removed(&self) -> impl Iterator<Item = SortedPair<Exact>> + '_ {
         self.edges
             .iter()
@@ -875,6 +906,14 @@ impl VertexStatus {
     }
 }
 
+/// A data structure for building a set of vertices which are considered "interior" and are not
+/// relevant to collision normals.
+///
+/// If a collision occurs and hits one of these vertices, the collision is still valid, but the
+/// normal should be adjusted and replaced with the normal of the face being collided with.
+///
+/// TODO: is the face normal the correct normal for this or should it actually be replaced with the
+/// next nearest *edge* being collided with?
 #[derive(Debug, Default)]
 pub struct VertexFilter {
     edge_ids: HashMap<SortedPair<Exact>, usize>,
@@ -883,10 +922,12 @@ pub struct VertexFilter {
 }
 
 impl VertexFilter {
+    /// Create an empty vertex filter.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Clear the vertex filter, retaining allocated memory for reuse.
     pub fn clear(&mut self) {
         self.edge_ids.clear();
         self.vertices.clear();
@@ -901,7 +942,8 @@ impl VertexFilter {
             .map_or(false, |status| !status.is_removed())
     }
 
-    pub fn push(&mut self, edge: SortedPair<Exact>) {
+    /// Push a potentially filtered-out edge into the vertex filter.
+    pub fn push(&mut self, removed: bool, edge: SortedPair<Exact>) {
         use std::collections::hash_map::Entry;
 
         if let Entry::Vacant(vacant) = self.edge_ids.entry(edge) {
@@ -911,6 +953,11 @@ impl VertexFilter {
 
             'register_vertices: for vertex in [edge.0, edge.1] {
                 let entry = self.vertices.entry(vertex).or_default();
+
+                if removed {
+                    *entry = VertexStatus::Removed;
+                }
+
                 let associated_edges = match entry {
                     VertexStatus::Extant(associated) => associated,
                     VertexStatus::Removed => continue,
@@ -937,10 +984,10 @@ impl VertexFilter {
     }
 }
 
-impl Extend<SortedPair<Exact>> for VertexFilter {
-    fn extend<T: IntoIterator<Item = SortedPair<Exact>>>(&mut self, iter: T) {
-        for edge in iter {
-            self.push(edge);
+impl Extend<(bool, SortedPair<Exact>)> for VertexFilter {
+    fn extend<T: IntoIterator<Item = (bool, SortedPair<Exact>)>>(&mut self, iter: T) {
+        for (removed, edge) in iter {
+            self.push(removed, edge);
         }
     }
 }
@@ -1240,6 +1287,64 @@ mod tests {
         });
         assert_eq!(edge_filter.iter_extant().count(), 22);
         assert_eq!(edge_filter.iter_removed().count(), 13);
+    }
+
+    #[test]
+    fn edge_filter_face_adjacent_cubes_with_ramp() {
+        let cube = Atom::new(vertex_set![1, 1, 1, 1, 1, 1, 1, 1]);
+        let ramp_negz = Atom::new(vertex_set![1, 1, 1, 1, 1, 0, 1, 0]);
+        let cube_negx_coords = Vector3::new(0, 0, 0);
+        let cube_posx_coords = Vector3::new(1, 0, 0);
+        let ramp_posz_coords = Vector3::new(0, 0, 1);
+
+        let mut cube_negx_hull = cube.compound_hull();
+        let mut cube_posx_hull = cube.compound_hull();
+        let mut ramp_negz_hull = ramp_negz.compound_hull();
+        cube_negx_hull.join_exteriors(Axis::PosX, &mut cube_posx_hull);
+        cube_posx_hull.join_exteriors(Axis::PosZ, &mut ramp_negz_hull);
+
+        let mut edge_filter = EdgeFilter::new();
+        edge_filter.extend(
+            cube_negx_hull
+                .facets()
+                .map(|facet| (cube_negx_coords, facet.translated_by(cube_negx_coords))),
+        );
+        edge_filter.extend(
+            cube_posx_hull
+                .facets()
+                .map(|facet| (cube_posx_coords, facet.translated_by(cube_posx_coords))),
+        );
+        edge_filter.extend(
+            ramp_negz_hull
+                .facets()
+                .map(|facet| (ramp_posz_coords, facet.translated_by(ramp_posz_coords))),
+        );
+
+        assert!(!edge_filter.edge_exists(SortedPair::new(
+            Exact(Point3::new(2, 0, 0)),
+            Exact(Point3::new(2, 0, 2))
+        )));
+        assert!(!edge_filter.edge_exists(SortedPair::new(
+            Exact(Point3::new(2, 0, 2)),
+            Exact(Point3::new(2, 2, 2))
+        )));
+        assert!(edge_filter.edge_exists(SortedPair::new(
+            Exact(Point3::new(0, 0, 0)),
+            Exact(Point3::new(0, 2, 0))
+        )));
+        let mut edges = edge_filter.iter_extant().collect::<Vec<_>>();
+        edges.sort_by_key(|e| {
+            [
+                e.0 .0.coords.x,
+                e.0 .0.coords.y,
+                e.0 .0.coords.z,
+                e.1 .0.coords.x,
+                e.1 .0.coords.y,
+                e.1 .0.coords.z,
+            ]
+        });
+        assert_eq!(edge_filter.iter_extant().count(), 18);
+        assert_eq!(edge_filter.iter_removed().count(), 18);
     }
 
     #[test]

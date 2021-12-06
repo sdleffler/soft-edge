@@ -492,11 +492,6 @@ impl Axis {
         (0u8..6).map(|b| unsafe { Self::from_u8_unchecked(b) })
     }
 
-    #[inline]
-    pub fn iter_orthogonal(self) -> impl Iterator<Item = Self> {
-        Self::generator().filter(move |axis| !axis.is_parallel(self))
-    }
-
     /// True if the face set for this axis requires a winding flip.
     ///
     /// This is likely not useful to you as a user, and is used internally inside the exterior hull
