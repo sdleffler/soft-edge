@@ -545,11 +545,7 @@ impl HullFacet {
     /// Find the facet's normal.
     #[inline]
     pub fn normal(self) -> UnitVector3<f32> {
-        let (Self::Triangle([a, b, c]) | Self::Rectangle([a, b, c, _])) = self;
-        let (p0, p1, p2) = (a.to_f32(), b.to_f32(), c.to_f32());
-        let v01 = p1 - p0;
-        let v02 = p2 - p0;
-        UnitVector3::new_normalize(v01.cross(&v02))
+        UnitVector3::new_normalize(self.discrete_scaled_normal().cast::<f32>())
     }
 
     /// Calculated the scaled normal of the face (the un-normalized normal - yes, I know, silly
@@ -889,20 +885,17 @@ impl Extend<(Vector3<i32>, HullFacet)> for EdgeFilter {
 }
 
 #[derive(Debug)]
-enum VertexStatus {
-    Extant(ArrayVec<usize, 8>),
-    Removed,
+struct VertexStatus {
+    associated_edges: ArrayVec<usize, 8>,
+    removed: bool,
 }
 
 impl Default for VertexStatus {
     fn default() -> Self {
-        Self::Extant(ArrayVec::new())
-    }
-}
-
-impl VertexStatus {
-    fn is_removed(&self) -> bool {
-        matches!(self, Self::Removed)
+        Self {
+            associated_edges: ArrayVec::new(),
+            removed: false,
+        }
     }
 }
 
@@ -939,7 +932,16 @@ impl VertexFilter {
     pub fn vertex_exists(&self, vertex: Exact) -> bool {
         self.vertices
             .get(&vertex)
-            .map_or(false, |status| !status.is_removed())
+            .map_or(false, |status| !status.removed)
+    }
+
+    /// Returns associated edges of a vertex.
+    pub fn associated_edges(&self, vertex: Exact) -> impl Iterator<Item = &SortedPair<Exact>> {
+        let edge_ids = self
+            .vertices
+            .get(&vertex)
+            .map_or(ArrayVec::new(), |status| status.associated_edges.clone());
+        edge_ids.into_iter().map(|edge_id| &self.edges[edge_id])
     }
 
     /// Push a potentially filtered-out edge into the vertex filter.
@@ -951,34 +953,24 @@ impl VertexFilter {
             vacant.insert(edge_id);
             let edge_dir = edge.1 .0 - edge.0 .0;
 
-            'register_vertices: for vertex in [edge.0, edge.1] {
+            for vertex in [edge.0, edge.1] {
                 let entry = self.vertices.entry(vertex).or_default();
 
-                if removed {
-                    *entry = VertexStatus::Removed;
-                }
-
-                let associated_edges = match entry {
-                    VertexStatus::Extant(associated) => associated,
-                    VertexStatus::Removed => continue,
-                };
-
-                'remove: loop {
-                    for &associated_edge_id in associated_edges.iter() {
-                        let associated_edge = &self.edges[associated_edge_id];
-                        // If we have another edge which is attached to this same vertex and which
-                        // shares a direction w/ this edge, then this vertex is to be filtered out.
-                        let associated_dir = associated_edge.1 .0 - associated_edge.0 .0;
-                        if associated_dir == edge_dir || -associated_dir == edge_dir {
-                            break 'remove;
-                        }
+                for &associated_edge_id in entry.associated_edges.iter() {
+                    let associated_edge = &self.edges[associated_edge_id];
+                    // If we have another edge which is attached to this same vertex and which
+                    // shares a direction w/ this edge, then this vertex is to be filtered out.
+                    let associated_dir = associated_edge.1 .0 - associated_edge.0 .0;
+                    if associated_dir == edge_dir || -associated_dir == edge_dir {
+                        entry.removed = true;
                     }
-
-                    associated_edges.push(edge_id);
-                    continue 'register_vertices;
                 }
 
-                *entry = VertexStatus::Removed;
+                if !removed {
+                    entry.associated_edges.push(edge_id);
+                } else {
+                    entry.removed = true;
+                }
             }
         }
     }

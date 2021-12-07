@@ -971,3 +971,9 @@ impl Ord for Exact {
         [self.0.x, self.0.y, self.0.z].cmp(&[other.0.x, other.0.y, other.0.z])
     }
 }
+
+impl fmt::Display for Exact {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.to_f32())
+    }
+}
